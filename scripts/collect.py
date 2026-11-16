@@ -6,7 +6,7 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-from verify import verify_config, verify_kernel, verify_manifest
+from verify import verify_config, verify_kernel, verify_manifest, verify_metadata, verify_sysupgrade
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,7 +21,7 @@ def run(*args):
 
 
 def archive(destination, directory, members):
-    run('tar', '--sort=name', '--exclude-vcs', '-I', 'zstd -T2 -3', '-cf', str(destination), '-C', str(directory), *members)
+    run('tar', '--sort=name', '--exclude-vcs', '--exclude=__pycache__', '--exclude=*.pyc', '-I', 'zstd -T2 -3', '-cf', str(destination), '-C', str(directory), *members)
 
 
 def main():
@@ -34,7 +34,7 @@ def main():
     firmware.mkdir()
     optional.mkdir()
     verify_config((work / '.config').read_text())
-    kernel = verify_kernel(work)
+    verify_kernel(work)
     profiles = json.loads((target / 'profiles.json').read_text())
     device = profiles['profiles']['iptime_t5004']
     if 'iptime,t5004' not in device['supported_devices']:
@@ -51,18 +51,16 @@ def main():
             raise ValueError('Image digest differs from profiles.json')
         shutil.copy2(image, firmware / image.name)
     sysupgrade = target / upgrades[0]['name']
-    with tarfile.open(sysupgrade) as image:
-        kernel_members = [item for item in image.getmembers() if item.name.endswith('/kernel')]
-        root_members = [item for item in image.getmembers() if item.name.endswith('/root')]
-        if len(kernel_members) != 1 or len(root_members) != 1:
-            raise ValueError('Invalid NAND sysupgrade layout')
-        if kernel_members[0].size > 4 * 1024 * 1024:
-            raise ValueError('Kernel exceeds the T5004 4 MiB partition')
+    verify_sysupgrade(sysupgrade)
+    root_image = work.parent / 'verified-root.squashfs'
+    with tarfile.open(sysupgrade) as image, root_image.open('wb') as output:
+        shutil.copyfileobj(image.extractfile('sysupgrade-iptime_t5004/root'), output)
+    rootfs = work.parent / 'verified-rootfs'
+    run('unsquashfs', '-no-progress', '-d', str(rootfs), str(root_image))
     fwtool = work / 'staging_dir/host/bin/fwtool'
     metadata_path = firmware / 'sysupgrade-metadata.json'
     run(str(fwtool), '-i', str(metadata_path), str(sysupgrade))
-    if 'iptime,t5004' not in json.loads(metadata_path.read_text())['supported_devices']:
-        raise ValueError('Sysupgrade trailer does not identify T5004')
+    verify_metadata(json.loads(metadata_path.read_text()))
     manifests = list(target.glob('*.manifest'))
     if len(manifests) != 1:
         raise ValueError('Expected a single-device firmware manifest')
@@ -74,29 +72,42 @@ def main():
             raise ValueError(f'Expected one matching optional package: {package}')
         path = next(iter(unique.values()))
         shutil.copy2(path, optional / path.name)
-    roots = list(work.glob('build_dir/target-*/root-ramips'))
-    if len(roots) != 1:
-        raise ValueError('Expected the final ramips root filesystem')
-    rootfs = roots[0]
     forbidden = list(rootfs.glob('etc/dropbear/*host_key')) + list(rootfs.glob('root/.ssh/*'))
     if forbidden or (rootfs / 'etc/dropbear/authorized_keys').exists():
         raise ValueError('Device SSH credentials must not be embedded')
+    for line in (rootfs / 'etc/shadow').read_text().splitlines():
+        if line.split(':')[1] not in ('', '*', '!'):
+            raise ValueError('Password hashes must not be embedded')
+    for path in (rootfs / 'etc').rglob('*'):
+        if path.is_file() and not path.is_symlink() and b'PRIVATE KEY-----' in path.read_bytes():
+            raise ValueError('Private keys must not be embedded in the image')
     if (rootfs / 'usr/bin/awg').exists() or list(rootfs.glob('lib/modules/*/amneziawg.ko')):
         raise ValueError('AWG was unexpectedly installed in the firmware')
+    if not (rootfs / 'usr/bin/wg').is_file() or not list(rootfs.glob('lib/modules/*/wireguard.ko')):
+        raise ValueError('WireGuard payload is missing from the actual image')
     public_keys = rootfs / 'etc/apk/keys'
-    if public_keys.exists():
-        shutil.copytree(public_keys, dist / 'package-public-keys')
+    if not any(path.is_file() for path in public_keys.glob('*')):
+        raise ValueError('Package verification public keys are missing')
+    shutil.copytree(public_keys, dist / 'package-public-keys')
+    apk = str(work / 'staging_dir/host/bin/apk')
+    repositories = sorted((work / 'bin').rglob('packages.adb'))
+    apk_args = [apk, '--root', str(rootfs), '--keys-dir', str(public_keys), '--arch', 'mipsel_24kc',
+                '--repositories-file', '/dev/null', '--no-network', '--no-scripts', '--simulate']
+    for repository in repositories:
+        apk_args.extend(['--repository', repository.as_uri()])
+    versions = dict(line.split(' - ', 1) for line in manifests[0].read_text().splitlines() if ' - ' in line)
+    install_check = subprocess.check_output([*apk_args, 'add', f"kernel={versions['kernel']}", 'amneziawg-tools'], text=True)
+    (dist / 'optional-install-check.txt').write_text(install_check)
     for path in manifests + [target / name for name in ['profiles.json', 'config.buildinfo', 'feeds.buildinfo', 'version.buildinfo']]:
         shutil.copy2(path, dist / path.name)
     shutil.copy2(ROOT / 'config/sources.json', dist / 'sources.json')
     shutil.copy2(work / '.config', dist / 'build.config')
-    for name in ['af_inet.c', 'tcp_ipv4.c']:
-        text = (kernel / 'net/ipv4' / name).read_text()
-        if 'kfree_rcu' not in text:
-            raise ValueError('Kernel security verification failed')
+    for pattern in ['linux-6.12.116.tar.*', 'kmod-amneziawg-*.tar.*', 'amneziawg-tools-*.tar.*']:
+        if not list((work / 'dl').glob(pattern)):
+            raise ValueError(f'Corresponding source archive is missing: {pattern}')
     archive(dist / 'matching-packages.tar.zst', work / 'bin', ['packages', 'targets/ramips/mt7621/packages'])
     tracked = subprocess.check_output(['git', '-C', str(work), 'ls-files', '-z'])
-    extra = ['.config', 'feeds.conf', 'feeds', 'dl', 'package/custom']
+    extra = ['.config', 'feeds.conf', 'feeds', 'dl', 'package/custom', 'package/feeds', 'version', 'version.date']
     source_list = work.parent / 'source-files.list'
     source_list.write_bytes(tracked + b''.join(name.encode() + b'\0' for name in extra))
     run('tar', '--sort=name', '--exclude-vcs', '-I', 'zstd -T2 -3', '-cf', str(dist / 'corresponding-source.tar.zst'), '-C', str(work), '--null', '-T', str(source_list))
@@ -105,10 +116,13 @@ def main():
         'device': 'iptime,t5004',
         'target': 'ramips/mt7621',
         'kernel': '6.12.116',
+        'kernel_package_version': versions['kernel'],
         'kernel_cve_2026_98432_fix_verified': True,
         'wireguard_installed': True,
         'amneziawg_installed': False,
         'microsocks_installed': False,
+        'optional_install_simulation_passed': True,
+        'optional_package_installation': 'Use the signed repositories in matching-packages.tar.zst and the bundled public keys. Loose APK files are not individually signed.',
         'installed_package_count': len(packages),
         'recipe_commit': os.environ.get('GITHUB_SHA'),
         'run_id': os.environ.get('GITHUB_RUN_ID'),

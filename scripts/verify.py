@@ -1,5 +1,6 @@
 import re
 import sys
+import tarfile
 from pathlib import Path
 
 REQUIRED_CONFIG = {
@@ -33,6 +34,35 @@ def verify_manifest(text):
     if packages & {'kmod-amneziawg', 'amneziawg-tools', 'microsocks'}:
         raise ValueError('Optional or excluded packages were installed into the firmware')
     return packages
+
+
+def verify_metadata(metadata):
+    if metadata.get('compat_version') != '1.1':
+        raise ValueError('Unexpected T5004 DSA compatibility version')
+    if 'iptime,t5004' not in metadata.get('new_supported_devices', []):
+        raise ValueError('Sysupgrade trailer does not identify T5004')
+    if metadata.get('version', {}).get('target') != 'ramips/mt7621':
+        raise ValueError('Unexpected sysupgrade target')
+
+
+def verify_sysupgrade(path):
+    prefix = 'sysupgrade-iptime_t5004/'
+    with tarfile.open(path) as image:
+        members = image.getmembers()
+        required = {}
+        for name in ['CONTROL', 'kernel', 'root']:
+            matches = [item for item in members if item.name == prefix + name]
+            if len(matches) != 1 or not matches[0].isfile() or matches[0].size == 0:
+                raise ValueError(f'Invalid sysupgrade member: {name}')
+            required[name] = matches[0]
+        if image.extractfile(required['CONTROL']).read().strip() != b'BOARD=iptime_t5004':
+            raise ValueError('Unexpected sysupgrade board')
+        if required['kernel'].size > 4 * 1024 * 1024:
+            raise ValueError('Kernel exceeds the T5004 4 MiB partition')
+        if image.extractfile(required['kernel']).read(4) != b'\x27\x05\x19\x56':
+            raise ValueError('Expected a uImage kernel')
+        if image.extractfile(required['root']).read(4) != b'hsqs':
+            raise ValueError('Expected a SquashFS root filesystem')
 
 
 def verify_kernel(work):

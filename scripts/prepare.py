@@ -37,6 +37,9 @@ def main():
     if work.exists():
         raise FileExistsError('Build directory must be empty and outside the recipe checkout')
     checkout(lock['openwrt'], work)
+    (work / 'version').write_text(f"custom-{lock['openwrt']['commit'][:12]}\n")
+    epoch = subprocess.check_output(['git', '-C', str(work), 'show', '-s', '--format=%ct', 'HEAD'], text=True)
+    (work / 'version.date').write_text(epoch)
     kernel = (work / 'target/linux/generic/kernel-6.12').read_text()
     if 'LINUX_VERSION-6.12 = .116' not in kernel:
         raise ValueError('Expected the verified Linux 6.12.116 source baseline')

@@ -1,8 +1,11 @@
+import io
+import tarfile
+import tempfile
 import unittest
 from pathlib import Path
 
 from prepare import replace_assignment
-from verify import verify_config, verify_manifest
+from verify import verify_config, verify_kernel, verify_manifest, verify_metadata, verify_sysupgrade
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,6 +41,82 @@ class BuildValidationTests(unittest.TestCase):
     def test_recipe_changes_fail_closed(self):
         with self.assertRaises(ValueError):
             replace_assignment('OTHER:=old\n', 'PKG_VERSION', 'new')
+
+
+class KernelValidationTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.work = Path(directory.name)
+        self.kernel = self.work / 'build_dir/target-mipsel/linux-ramips_mt7621/linux-6.12.116'
+        (self.kernel / 'net/ipv4').mkdir(parents=True)
+        (self.kernel / 'include/generated').mkdir(parents=True)
+        (self.kernel / 'net/ipv4/af_inet.c').write_text('kfree_rcu(rcu_dereference_protected(inet->inet_opt, 1), rcu);\n')
+        (self.kernel / 'net/ipv4/tcp_ipv4.c').write_text('kfree_rcu(rcu_dereference_protected(inet_rsk(req)->ireq_opt, 1), rcu);\n')
+        (self.kernel / 'include/generated/utsrelease.h').write_text('#define UTS_RELEASE "6.12.116"\n')
+
+    def test_patched_kernel(self):
+        self.assertEqual(verify_kernel(self.work), self.kernel)
+
+    def test_both_security_corrections_are_required(self):
+        for filename in ['af_inet.c', 'tcp_ipv4.c']:
+            with self.subTest(filename=filename):
+                source = self.kernel / 'net/ipv4' / filename
+                original = source.read_text()
+                source.write_text(original.replace('kfree_rcu', 'kfree'))
+                with self.assertRaisesRegex(ValueError, 'correction missing'):
+                    verify_kernel(self.work)
+                source.write_text(original)
+
+    def test_compiled_release_must_match(self):
+        (self.kernel / 'include/generated/utsrelease.h').write_text('#define UTS_RELEASE "6.12.112"\n')
+        with self.assertRaisesRegex(ValueError, 'Compiled kernel release'):
+            verify_kernel(self.work)
+
+    def test_ambiguous_kernel_tree_is_rejected(self):
+        (self.work / 'build_dir/target-other/linux-ramips_mt7621/linux-6.12.116').mkdir(parents=True)
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            verify_kernel(self.work)
+
+
+class ImageValidationTests(unittest.TestCase):
+    def test_dsa_metadata(self):
+        verify_metadata({'compat_version': '1.1', 'new_supported_devices': ['iptime,t5004'],
+                         'supported_devices': ['Image version mismatch'], 'version': {'target': 'ramips/mt7621'}})
+
+    def test_wrong_metadata(self):
+        with self.assertRaises(ValueError):
+            verify_metadata({'compat_version': '1.0', 'supported_devices': ['iptime,t5004']})
+        with self.assertRaises(ValueError):
+            verify_metadata({'compat_version': '1.1', 'new_supported_devices': ['other,device']})
+
+    def test_sysupgrade_members(self):
+        cases = [
+            ('valid', b'BOARD=iptime_t5004\n', b'\x27\x05\x19\x56data', b'hsqsdata', False, True),
+            ('wrong board', b'BOARD=other\n', b'\x27\x05\x19\x56data', b'hsqsdata', False, False),
+            ('wrong header', b'BOARD=iptime_t5004\n', b'not uImage', b'hsqsdata', False, False),
+            ('empty root', b'BOARD=iptime_t5004\n', b'\x27\x05\x19\x56data', b'', False, False),
+            ('symlink root', b'BOARD=iptime_t5004\n', b'\x27\x05\x19\x56data', b'hsqsdata', True, False),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'image.bin'
+            for name, control, kernel, root, link, valid in cases:
+                with self.subTest(name=name):
+                    with tarfile.open(path, 'w') as image:
+                        for member, data in [('CONTROL', control), ('kernel', kernel), ('root', root)]:
+                            info = tarfile.TarInfo(f'sysupgrade-iptime_t5004/{member}')
+                            if link and member == 'root':
+                                info.type = tarfile.SYMTYPE
+                                info.linkname = 'kernel'
+                                image.addfile(info)
+                            else:
+                                info.size = len(data)
+                                image.addfile(info, io.BytesIO(data))
+                    if valid:
+                        verify_sysupgrade(path)
+                    else:
+                        with self.assertRaises(ValueError):
+                            verify_sysupgrade(path)
 
 
 if __name__ == '__main__':
