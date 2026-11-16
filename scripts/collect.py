@@ -56,7 +56,7 @@ def main():
     with tarfile.open(sysupgrade) as image, root_image.open('wb') as output:
         shutil.copyfileobj(image.extractfile('sysupgrade-iptime_t5004/root'), output)
     rootfs = work.parent / 'verified-rootfs'
-    run('unsquashfs', '-no-progress', '-d', str(rootfs), str(root_image))
+    run('fakeroot', 'unsquashfs', '-no-progress', '-d', str(rootfs), str(root_image))
     fwtool = work / 'staging_dir/host/bin/fwtool'
     metadata_path = firmware / 'sysupgrade-metadata.json'
     run(str(fwtool), '-i', str(metadata_path), str(sysupgrade))

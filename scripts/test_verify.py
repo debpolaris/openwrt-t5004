@@ -1,4 +1,6 @@
 import io
+import shutil
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -80,6 +82,21 @@ class KernelValidationTests(unittest.TestCase):
 
 
 class ImageValidationTests(unittest.TestCase):
+    @unittest.skipUnless(all(shutil.which(tool) for tool in ['fakeroot', 'mksquashfs', 'unsquashfs']), 'SquashFS host tools unavailable')
+    def test_unprivileged_device_node_extraction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'source'
+            (source / 'dev').mkdir(parents=True)
+            (source / 'payload').write_text('verified')
+            image = root / 'root.squashfs'
+            command = 'mknod "$1/dev/console" c 5 1 && mksquashfs "$1" "$2" -noappend -no-progress -processors 1'
+            subprocess.run(['fakeroot', 'sh', '-c', command, 'sh', str(source), str(image)], check=True, stdout=subprocess.DEVNULL)
+            output = root / 'unpacked'
+            subprocess.run(['fakeroot', 'unsquashfs', '-no-progress', '-d', str(output), str(image)], check=True, stdout=subprocess.DEVNULL)
+            self.assertEqual((output / 'payload').read_text(), 'verified')
+            self.assertTrue((output / 'dev/console').exists())
+
     def test_dsa_metadata(self):
         verify_metadata({'compat_version': '1.1', 'new_supported_devices': ['iptime,t5004'],
                          'supported_devices': ['Image version mismatch'], 'version': {'target': 'ramips/mt7621'}})

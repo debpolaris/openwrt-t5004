@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -47,12 +48,21 @@ def main():
     (work / 'feeds.conf').write_text('\n'.join(feed_lines) + '\n')
     recipes = work.parent / 'awg-recipes'
     checkout(lock['awg_packages'], recipes)
+    (work / 'dl').mkdir()
     for package, key in [('kmod-amneziawg', 'awg_kernel'), ('amneziawg-tools', 'awg_tools')]:
+        source = work.parent / key.replace('_', '-')
+        checkout(lock[key], source)
+        archive_name = f"{package}-{lock[key]['version']}"
+        archive = work / 'dl' / f'{archive_name}.tar.zst'
+        data = subprocess.check_output(['git', '-C', str(source), 'archive', '--format=tar', f'--prefix={archive_name}/', 'HEAD'])
+        subprocess.run(['zstd', '-T1', '-19', '-o', str(archive)], input=data, check=True)
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         destination = work / 'package/custom' / package
         shutil.copytree(recipes / package, destination)
         makefile = destination / 'Makefile'
         text = replace_assignment(makefile.read_text(), 'PKG_VERSION', lock[key]['version'])
         text = replace_assignment(text, 'PKG_SOURCE_VERSION', lock[key]['commit'])
+        text = text.replace(f"PKG_SOURCE_VERSION:={lock[key]['commit']}\n", f"PKG_SOURCE_VERSION:={lock[key]['commit']}\nPKG_MIRROR_HASH:={digest}\n")
         if package == 'kmod-amneziawg':
             text, count = re.subn(r'^define Build/Prepare\n.*?^endef\n', '', text, flags=re.MULTILINE | re.DOTALL)
             if count != 1:
