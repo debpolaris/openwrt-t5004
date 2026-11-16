@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from prepare import replace_assignment
-from verify import verify_config, verify_kernel, verify_manifest, verify_metadata, verify_sysupgrade
+from verify import verify_config, verify_kernel, verify_manifest, verify_metadata, verify_shadow, verify_sysupgrade
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,6 +36,14 @@ class BuildValidationTests(unittest.TestCase):
 
     def test_valid_manifest(self):
         verify_manifest('kmod-wireguard - 1\nwireguard-tools - 1\nbase-files - 1\n')
+
+    def test_official_account_lock_markers(self):
+        verify_shadow('root:::0:99999:7:::\ndaemon:*:0:0:99999:7:::\nservice:x:0:0:99999:7:::\nlocked:!:0:0:99999:7:::\n')
+
+    def test_password_hashes_are_rejected(self):
+        for password in ['$6$example$hash', '!$6$example$hash', 'ab12345678901']:
+            with self.subTest(password=password), self.assertRaises(ValueError):
+                verify_shadow(f'root:{password}:0:0:99999:7:::\n')
 
     def test_recipe_version_replacement(self):
         self.assertEqual(replace_assignment('PKG_VERSION:=old\n', 'PKG_VERSION', 'new'), 'PKG_VERSION:=new\n')

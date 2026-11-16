@@ -6,7 +6,7 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-from verify import verify_config, verify_kernel, verify_manifest, verify_metadata, verify_sysupgrade
+from verify import verify_config, verify_kernel, verify_manifest, verify_metadata, verify_shadow, verify_sysupgrade
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -75,9 +75,7 @@ def main():
     forbidden = list(rootfs.glob('etc/dropbear/*host_key')) + list(rootfs.glob('root/.ssh/*'))
     if forbidden or (rootfs / 'etc/dropbear/authorized_keys').exists():
         raise ValueError('Device SSH credentials must not be embedded')
-    for line in (rootfs / 'etc/shadow').read_text().splitlines():
-        if line.split(':')[1] not in ('', '*', '!'):
-            raise ValueError('Password hashes must not be embedded')
+    verify_shadow((rootfs / 'etc/shadow').read_text())
     for path in (rootfs / 'etc').rglob('*'):
         if path.is_file() and not path.is_symlink() and b'PRIVATE KEY-----' in path.read_bytes():
             raise ValueError('Private keys must not be embedded in the image')

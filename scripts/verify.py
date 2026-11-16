@@ -36,6 +36,12 @@ def verify_manifest(text):
     return packages
 
 
+def verify_shadow(text):
+    for line in text.splitlines():
+        if line.split(':')[1] not in ('', '*', '!', 'x'):
+            raise ValueError('Password hashes must not be embedded')
+
+
 def verify_metadata(metadata):
     if metadata.get('compat_version') != '1.1':
         raise ValueError('Unexpected T5004 DSA compatibility version')
