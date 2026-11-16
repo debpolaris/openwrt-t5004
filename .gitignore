@@ -1,0 +1,5 @@
+/dist/
+/logs/
+/openwrt/
+/__pycache__/
+*.pyc

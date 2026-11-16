@@ -1,0 +1,39 @@
+{
+  "openwrt": {
+    "url": "https://github.com/openwrt/openwrt.git",
+    "commit": "60c494ad065fe3fcaeadf0e9ff4a8a2dc6e6be43",
+    "kernel": "6.12.116"
+  },
+  "feeds": {
+    "packages": {
+      "url": "https://github.com/openwrt/packages.git",
+      "commit": "c2c619e6f065b238ab000b6cfc5afa238658b0c9"
+    },
+    "luci": {
+      "url": "https://github.com/openwrt/luci.git",
+      "commit": "1c75ea46c68ebc386fef9922089260de16f30417"
+    },
+    "routing": {
+      "url": "https://github.com/openwrt/routing.git",
+      "commit": "625f9d8446807708bab4eef26cdc44692164818a"
+    },
+    "telephony": {
+      "url": "https://github.com/openwrt/telephony.git",
+      "commit": "c58ec5a6703966dcccb53d0919698c8aba3a9ef5"
+    }
+  },
+  "awg_packages": {
+    "url": "https://github.com/Slava-Shchipunov/awg-openwrt.git",
+    "commit": "03b62269e2edc168504f057cffaafda11b25ed92"
+  },
+  "awg_kernel": {
+    "url": "https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git",
+    "version": "3.1.20261113.2",
+    "commit": "63ed35de3d3f135b17e8eae0b84949e7700303be"
+  },
+  "awg_tools": {
+    "url": "https://github.com/amnezia-vpn/amneziawg-tools.git",
+    "version": "3.1.20260812",
+    "commit": "ee0f0a9aa34ff0a0da4b3433b9512781cfe02843"
+  }
+}
