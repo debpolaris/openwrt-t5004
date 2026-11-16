@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
-      OPENWRT_DIR: ${{ runner.temp }}/openwrt
       BUILD_JOBS: '4'
       TZ: UTC
       LC_ALL: C.UTF-8
@@ -30,6 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$RUNNER_ENVIRONMENT" = github-hosted
+          printf 'OPENWRT_DIR=%s/openwrt\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
