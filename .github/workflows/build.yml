@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: t5004-build
@@ -72,6 +72,85 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 90
+
+      - name: Prepare release metadata
+        id: release
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import tarfile
+          from pathlib import Path
+
+          dist = Path('dist')
+          verification = json.loads((dist / 'verification.json').read_text())
+          sources = json.loads((dist / 'sources.json').read_text())
+          profiles = json.loads((dist / 'profiles.json').read_text())
+          images = profiles['profiles']['iptime_t5004']['images']
+          sysupgrade = next(image for image in images if image['type'] == 'sysupgrade')
+          with tarfile.open(dist / sysupgrade['name']) as archive:
+              kernel_size = archive.getmember('sysupgrade-iptime_t5004/kernel').size
+
+          commit = sources['openwrt']['commit']
+          recipe_commit = os.environ['GITHUB_SHA']
+          tag = f"v25.12-k{verification['kernel']}-{commit[:12]}-{recipe_commit[:12]}"
+          title = f"T5004 OpenWrt 25.12 Linux {verification['kernel']} (prerelease)"
+          notes = '\n'.join([
+              f"# T5004 firmware {verification['kernel']}",
+              '',
+              f"- OpenWrt 25.12-SNAPSHOT, revision `custom-{commit[:12]}` (`{commit}`)",
+              '- Target `ramips/mt7621`, device `iptime,t5004`',
+              f"- Linux **{verification['kernel']}**; CVE-2026-98432 and CVE-2026-99288 source corrections verified",
+              '- Dropbear SSH with `openssh-sftp-server`; OpenSSH server is not installed',
+              '- WireGuard installed; AmneziaWG provided only as optional packages',
+              f"- {verification['installed_package_count']} installed packages; optional package install simulation passed",
+              f'- Kernel member {kernel_size:,} bytes (T5004 limit: 4 MiB)',
+              f"- Recipe commit `{verification['recipe_commit']}`, Actions run `{verification['run_id']}` attempt `{verification['run_attempt']}`",
+              '',
+              '## Verification',
+              '',
+              '`SHA256SUMS`, image metadata, package manifest, rootfs payloads, credentials, corresponding sources, and the build recipe are included. Device boot and live networking have **not** been tested (`runtime_tested: false`).',
+              '',
+              '## Install',
+              '',
+              'Download `*-squashfs-sysupgrade.bin` and `SHA256SUMS`, verify the checksum, then install from an on-site LAN session:',
+              '',
+              '```sh',
+              'sha256sum -c SHA256SUMS',
+              'sysupgrade -n /tmp/openwrt-ramips-mt7621-iptime_t5004-squashfs-sysupgrade.bin',
+              '```',
+              '',
+              'Do not flash remotely. Review OpenWrt issue 25457 before using VLAN-aware bridge STP.',
+          ])
+          Path(os.environ['RUNNER_TEMP'], 't5004-release-notes.md').write_text(notes)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'tag={tag}\n')
+              output.write(f'title={title}\n')
+          PY
+
+      - name: Publish verified firmware as a prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.release.outputs.tag }}"
+          title="${{ steps.release.outputs.title }}"
+          notes="$RUNNER_TEMP/t5004-release-notes.md"
+          mapfile -d '' assets < <(find dist -type f -print0 | sort -z)
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+            gh release edit "$tag" --title "$title" --notes-file "$notes" --prerelease
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --notes-file "$notes" \
+              --prerelease
+          fi
+          url="$(gh release view "$tag" --json url --jq .url)"
+          printf 'Published firmware release: %s\n' "$url" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload diagnostic logs
         if: failure()

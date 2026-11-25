@@ -80,7 +80,7 @@ CI(`scripts/collect.py`, `scripts/verify.py`)와 독립 재검증으로 확인�
 
 ## 빌드 재현
 
-GitHub Actions 워크플로 `Build T5004 firmware`를 `workflow_dispatch`로 실행합니다. hosted runner에서 핀된 소스를 받아 빌드하고, 검증 후 `dist/`를 아티팩트로 올립니다(90일 보존). 릴리스는 그 산출물을 등록한 것입니다.
+GitHub Actions 워크플로 `Build T5004 firmware`를 `workflow_dispatch`로 실행합니다. hosted runner에서 핀된 소스를 받아 빌드하고, 검증 후 `dist/`를 아티팩트로 올립니다(90일 보존). 성공하면 `v25.12-k<kernel>-<openwrt-commit12>-<recipe-commit12>` 태그의 **prerelease**를 자동 생성하고 펌웨어·선택 패키지·검증 파일·대응 소스를 Release 자산으로 업로드합니다.
 
 ```
 config/sources.json   # 핀된 커밋/버전

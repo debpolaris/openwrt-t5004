@@ -32,10 +32,20 @@ class BuildValidationTests(unittest.TestCase):
 
     def test_manifest_excludes_optional_packages(self):
         with self.assertRaises(ValueError):
-            verify_manifest('kmod-wireguard - 1\nwireguard-tools - 1\namneziawg-tools - 1\n')
+            verify_manifest('dropbear - 1\nopenssh-sftp-server - 1\nkmod-wireguard - 1\nwireguard-tools - 1\namneziawg-tools - 1\n')
+
+    def test_manifest_rejects_openssh_server(self):
+        with self.assertRaisesRegex(ValueError, 'Unexpected OpenSSH packages'):
+            verify_manifest('dropbear - 1\nopenssh-sftp-server - 1\nopenssh-server - 1\nkmod-wireguard - 1\nwireguard-tools - 1\n')
 
     def test_valid_manifest(self):
-        verify_manifest('kmod-wireguard - 1\nwireguard-tools - 1\nbase-files - 1\n')
+        verify_manifest('dropbear - 1\nopenssh-sftp-server - 1\nkmod-wireguard - 1\nwireguard-tools - 1\nbase-files - 1\n')
+
+    def test_config_rejects_openssh_server(self):
+        text = (ROOT / 'config/t5004.config').read_text().replace(
+            '# CONFIG_PACKAGE_openssh-server is not set', 'CONFIG_PACKAGE_openssh-server=y')
+        with self.assertRaisesRegex(ValueError, 'Only openssh-sftp-server'):
+            verify_config(text)
 
     def test_official_account_lock_markers(self):
         verify_shadow('root:::0:99999:7:::\ndaemon:*:0:0:99999:7:::\nservice:x:0:0:99999:7:::\nlocked:!:0:0:99999:7:::\n')
@@ -58,12 +68,36 @@ class KernelValidationTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.work = Path(directory.name)
-        self.kernel = self.work / 'build_dir/target-mipsel/linux-ramips_mt7621/linux-6.12.116'
+        self.kernel = self.work / 'build_dir/target-mipsel/linux-ramips_mt7621/linux-6.12.118'
         (self.kernel / 'net/ipv4').mkdir(parents=True)
+        (self.kernel / 'net/ipv6').mkdir(parents=True)
         (self.kernel / 'include/generated').mkdir(parents=True)
         (self.kernel / 'net/ipv4/af_inet.c').write_text('kfree_rcu(rcu_dereference_protected(inet->inet_opt, 1), rcu);\n')
         (self.kernel / 'net/ipv4/tcp_ipv4.c').write_text('kfree_rcu(rcu_dereference_protected(inet_rsk(req)->ireq_opt, 1), rcu);\n')
-        (self.kernel / 'include/generated/utsrelease.h').write_text('#define UTS_RELEASE "6.12.116"\n')
+        patched = {
+            'net/ipv4/inet_hashtables.c': 'hlist_nulls_unhashed_lockless(&sk->sk_nulls_node)\n',
+            'net/ipv6/inet6_hashtables.c': 'hlist_nulls_unhashed_lockless(&sk->sk_nulls_node)\n',
+            'net/ipv4/inet_connection_sock.c': (
+                '/* The timer was not armed, drop its reference here. */\n'
+                'reqsk_put(nreq);\nno_ownership:\n'
+                'reqsk_migrate_reset(nreq);\nreqsk_queue_removed(queue, nreq);\n'
+                '/* Drop the temporary reference and the one reserved for ehash. */\n'
+                'reqsk_put(nreq);\nreqsk_put(nreq);\n'
+                '__NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPMIGRATEREQFAILURE);\n'
+                'reqsk_migrate_reset(nreq);\nreqsk_put(nreq);\n'
+                '__NET_INC_STATS(sock_net(nsk), LINUX_MIB_TCPMIGRATEREQFAILURE);\n'
+                'reqsk_migrate_reset(nreq);\nreqsk_put(nreq);\n'
+            ),
+            'net/ipv4/syncookies.c': (
+                'bh_unlock_sock(child);\nsock_put(child);\nreqsk_put(req);\nreturn NULL;\n'
+            ),
+            'net/ipv4/tcp_input.c': (
+                '/* tcp_disconnect() already dropped one reqsk ref. */\nreqsk_put(req);\ngoto drop;\n'
+            ),
+        }
+        for filename, content in patched.items():
+            (self.kernel / filename).write_text(content)
+        (self.kernel / 'include/generated/utsrelease.h').write_text('#define UTS_RELEASE "6.12.118"\n')
 
     def test_patched_kernel(self):
         self.assertEqual(verify_kernel(self.work), self.kernel)
@@ -78,13 +112,41 @@ class KernelValidationTests(unittest.TestCase):
                     verify_kernel(self.work)
                 source.write_text(original)
 
+    def test_noisytcp_guards_are_required(self):
+        for filename in ['net/ipv4/inet_hashtables.c', 'net/ipv6/inet6_hashtables.c']:
+            with self.subTest(filename=filename):
+                source = self.kernel / filename
+                original = source.read_text()
+                source.write_text(original.replace('hlist_nulls_unhashed_lockless', 'hlist_nulls_is_empty'))
+                with self.assertRaisesRegex(ValueError, 'CVE-2026-99288 correction missing'):
+                    verify_kernel(self.work)
+                source.write_text(original)
+
+    def test_noisytcp_request_reference_corrections_are_required(self):
+        requirements = [
+            ('net/ipv4/inet_connection_sock.c', '/* The timer was not armed, drop its reference here. */'),
+            ('net/ipv4/inet_connection_sock.c', '/* Drop the temporary reference and the one reserved for ehash. */'),
+            ('net/ipv4/inet_connection_sock.c', '__NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPMIGRATEREQFAILURE);'),
+            ('net/ipv4/inet_connection_sock.c', '__NET_INC_STATS(sock_net(nsk), LINUX_MIB_TCPMIGRATEREQFAILURE);'),
+            ('net/ipv4/syncookies.c', 'bh_unlock_sock(child);'),
+            ('net/ipv4/tcp_input.c', '/* tcp_disconnect() already dropped one reqsk ref. */'),
+        ]
+        for filename, marker in requirements:
+            with self.subTest(filename=filename, marker=marker):
+                source = self.kernel / filename
+                original = source.read_text()
+                source.write_text(original.replace(marker, '/* correction removed */'))
+                with self.assertRaisesRegex(ValueError, 'CVE-2026-99288 correction missing'):
+                    verify_kernel(self.work)
+                source.write_text(original)
+
     def test_compiled_release_must_match(self):
-        (self.kernel / 'include/generated/utsrelease.h').write_text('#define UTS_RELEASE "6.12.112"\n')
+        (self.kernel / 'include/generated/utsrelease.h').write_text('#define UTS_RELEASE "6.12.117"\n')
         with self.assertRaisesRegex(ValueError, 'Compiled kernel release'):
             verify_kernel(self.work)
 
     def test_ambiguous_kernel_tree_is_rejected(self):
-        (self.work / 'build_dir/target-other/linux-ramips_mt7621/linux-6.12.116').mkdir(parents=True)
+        (self.work / 'build_dir/target-other/linux-ramips_mt7621/linux-6.12.118').mkdir(parents=True)
         with self.assertRaisesRegex(ValueError, 'exactly one'):
             verify_kernel(self.work)
 

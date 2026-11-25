@@ -42,8 +42,8 @@ def main():
     epoch = subprocess.check_output(['git', '-C', str(work), 'show', '-s', '--format=%ct', 'HEAD'], text=True)
     (work / 'version.date').write_text(epoch)
     kernel = (work / 'target/linux/generic/kernel-6.12').read_text()
-    if 'LINUX_VERSION-6.12 = .116' not in kernel:
-        raise ValueError('Expected the verified Linux 6.12.116 source baseline')
+    if 'LINUX_VERSION-6.12 = .118' not in kernel:
+        raise ValueError('Expected the verified Linux 6.12.118 source baseline')
     feed_lines = [f"src-git {name} {source['url']}^{source['commit']}" for name, source in lock['feeds'].items()]
     (work / 'feeds.conf').write_text('\n'.join(feed_lines) + '\n')
     recipes = work.parent / 'awg-recipes'

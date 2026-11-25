@@ -7,6 +7,9 @@ REQUIRED_CONFIG = {
     'CONFIG_TARGET_ramips': 'y',
     'CONFIG_TARGET_ramips_mt7621': 'y',
     'CONFIG_TARGET_ramips_mt7621_DEVICE_iptime_t5004': 'y',
+    'CONFIG_PACKAGE_dropbear': 'y',
+    'CONFIG_DROPBEAR_SFTPSERVER': 'y',
+    'CONFIG_PACKAGE_openssh-sftp-server': 'y',
     'CONFIG_PACKAGE_kmod-wireguard': 'y',
     'CONFIG_PACKAGE_wireguard-tools': 'y',
     'CONFIG_PACKAGE_kmod-amneziawg': 'm',
@@ -22,6 +25,9 @@ def verify_config(text):
     for package in ['microsocks', 'luci-proto-amneziawg']:
         if values.get(f'CONFIG_PACKAGE_{package}') in ('y', 'm'):
             raise ValueError(f'Unexpected package: {package}')
+    for key, value in values.items():
+        if key.startswith('CONFIG_PACKAGE_openssh-') and value in ('y', 'm') and key != 'CONFIG_PACKAGE_openssh-sftp-server':
+            raise ValueError(f'Only openssh-sftp-server may be installed: {key}')
     devices = [key for key, value in values.items() if key.startswith('CONFIG_TARGET_ramips_mt7621_DEVICE_') and value == 'y']
     if devices != ['CONFIG_TARGET_ramips_mt7621_DEVICE_iptime_t5004']:
         raise ValueError('The build must target only ipTIME T5004')
@@ -29,8 +35,11 @@ def verify_config(text):
 
 def verify_manifest(text):
     packages = {line.split()[0] for line in text.splitlines() if line.strip()}
-    if not {'kmod-wireguard', 'wireguard-tools'} <= packages:
-        raise ValueError('WireGuard is missing from the firmware manifest')
+    if not {'dropbear', 'openssh-sftp-server', 'kmod-wireguard', 'wireguard-tools'} <= packages:
+        raise ValueError('Dropbear, SFTP, or WireGuard is missing from the firmware manifest')
+    unexpected_openssh = {package for package in packages if package.startswith('openssh-') and package != 'openssh-sftp-server'}
+    if unexpected_openssh:
+        raise ValueError(f'Unexpected OpenSSH packages: {sorted(unexpected_openssh)}')
     if packages & {'kmod-amneziawg', 'amneziawg-tools', 'microsocks'}:
         raise ValueError('Optional or excluded packages were installed into the firmware')
     return packages
@@ -72,9 +81,9 @@ def verify_sysupgrade(path):
 
 
 def verify_kernel(work):
-    candidates = list(work.glob('build_dir/target-*/linux-ramips_mt7621/linux-6.12.116'))
+    candidates = list(work.glob('build_dir/target-*/linux-ramips_mt7621/linux-6.12.118'))
     if len(candidates) != 1:
-        raise ValueError('Expected exactly one prepared Linux 6.12.116 tree')
+        raise ValueError('Expected exactly one prepared Linux 6.12.118 tree')
     kernel = candidates[0]
     for filename, expression in [
         ('net/ipv4/af_inet.c', 'kfree_rcu(rcu_dereference_protected(inet->inet_opt, 1), rcu);'),
@@ -82,9 +91,33 @@ def verify_kernel(work):
     ]:
         if expression not in (kernel / filename).read_text():
             raise ValueError(f'CVE-2026-98432 correction missing from {filename}')
+    noisytcp = {
+        'net/ipv4/inet_hashtables.c': [
+            'hlist_nulls_unhashed_lockless(&sk->sk_nulls_node)',
+        ],
+        'net/ipv6/inet6_hashtables.c': [
+            'hlist_nulls_unhashed_lockless(&sk->sk_nulls_node)',
+        ],
+        'net/ipv4/inet_connection_sock.c': [
+            '/* The timer was not armed, drop its reference here. */ reqsk_put(nreq); no_ownership: reqsk_migrate_reset(nreq); reqsk_queue_removed(queue, nreq); /* Drop the temporary reference and the one reserved for ehash. */ reqsk_put(nreq); reqsk_put(nreq);',
+            '__NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPMIGRATEREQFAILURE); reqsk_migrate_reset(nreq); reqsk_put(nreq);',
+            '__NET_INC_STATS(sock_net(nsk), LINUX_MIB_TCPMIGRATEREQFAILURE); reqsk_migrate_reset(nreq); reqsk_put(nreq);',
+        ],
+        'net/ipv4/syncookies.c': [
+            'bh_unlock_sock(child); sock_put(child); reqsk_put(req); return NULL;',
+        ],
+        'net/ipv4/tcp_input.c': [
+            '/* tcp_disconnect() already dropped one reqsk ref. */ reqsk_put(req); goto drop;',
+        ],
+    }
+    for filename, expressions in noisytcp.items():
+        source = re.sub(r'\s+', ' ', (kernel / filename).read_text()).strip()
+        for expression in expressions:
+            if expression not in source:
+                raise ValueError(f'CVE-2026-99288 correction missing from {filename}')
     release = (kernel / 'include/generated/utsrelease.h').read_text()
-    if not re.search(r'^#define UTS_RELEASE "6\.12\.116"$', release, re.MULTILINE):
-        raise ValueError('Compiled kernel release is not 6.12.116')
+    if not re.search(r'^#define UTS_RELEASE "6\.12\.118"$', release, re.MULTILINE):
+        raise ValueError('Compiled kernel release is not 6.12.118')
     return kernel
 
 

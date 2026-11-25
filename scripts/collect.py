@@ -72,7 +72,9 @@ def main():
             raise ValueError(f'Expected one matching optional package: {package}')
         path = next(iter(unique.values()))
         shutil.copy2(path, optional / path.name)
-    forbidden = list(rootfs.glob('etc/dropbear/*host_key')) + list(rootfs.glob('root/.ssh/*'))
+    forbidden = (list(rootfs.glob('etc/dropbear/*host_key'))
+                 + list(rootfs.glob('etc/ssh/ssh_host_*_key'))
+                 + list(rootfs.glob('root/.ssh/*')))
     if forbidden or (rootfs / 'etc/dropbear/authorized_keys').exists():
         raise ValueError('Device SSH credentials must not be embedded')
     verify_shadow((rootfs / 'etc/shadow').read_text())
@@ -83,6 +85,26 @@ def main():
         raise ValueError('AWG was unexpectedly installed in the firmware')
     if not (rootfs / 'usr/bin/wg').is_file() or not list(rootfs.glob('lib/modules/*/wireguard.ko')):
         raise ValueError('WireGuard payload is missing from the actual image')
+    if not (rootfs / 'usr/sbin/dropbear').is_file():
+        raise ValueError('Dropbear payload is missing from the actual image')
+    sftp_link = rootfs / 'usr/libexec/sftp-server'
+    if (not (rootfs / 'usr/lib/sftp-server').is_file()
+            or not sftp_link.is_symlink()
+            or os.readlink(sftp_link) != '../lib/sftp-server'):
+        raise ValueError('OpenSSH SFTP server payload or Dropbear compatibility link is invalid')
+    server_artifacts = [
+        'usr/sbin/sshd',
+        'etc/init.d/sshd',
+        'lib/preinit/99_10_failsafe_sshd',
+        'usr/lib/sshd-auth',
+        'usr/lib/sshd-session',
+        'etc/ssh/sshd_config',
+        'etc/ssh/sshd_config.d',
+        'etc/pam.d/sshd',
+        'etc/security/access-sshd-local.conf',
+    ]
+    if any((rootfs / path).exists() or (rootfs / path).is_symlink() for path in server_artifacts):
+        raise ValueError('OpenSSH server must not be installed in the firmware')
     public_keys = rootfs / 'etc/apk/keys'
     if not any(path.is_file() for path in public_keys.glob('*')):
         raise ValueError('Package verification public keys are missing')
@@ -100,7 +122,7 @@ def main():
         shutil.copy2(path, dist / path.name)
     shutil.copy2(ROOT / 'config/sources.json', dist / 'sources.json')
     shutil.copy2(work / '.config', dist / 'build.config')
-    for pattern in ['linux-6.12.116.tar.*', 'kmod-amneziawg-*.tar.*', 'amneziawg-tools-*.tar.*']:
+    for pattern in ['linux-6.12.118.tar.*', 'kmod-amneziawg-*.tar.*', 'amneziawg-tools-*.tar.*']:
         if not list((work / 'dl').glob(pattern)):
             raise ValueError(f'Corresponding source archive is missing: {pattern}')
     archive(dist / 'matching-packages.tar.zst', work / 'bin', ['packages', 'targets/ramips/mt7621/packages'])
@@ -113,9 +135,13 @@ def main():
     report = {
         'device': 'iptime,t5004',
         'target': 'ramips/mt7621',
-        'kernel': '6.12.116',
+        'kernel': '6.12.118',
         'kernel_package_version': versions['kernel'],
         'kernel_cve_2026_98432_fix_verified': True,
+        'kernel_cve_2026_99288_fix_verified': True,
+        'dropbear_installed': True,
+        'openssh_sftp_server_installed': True,
+        'openssh_server_installed': False,
         'wireguard_installed': True,
         'amneziawg_installed': False,
         'microsocks_installed': False,
@@ -135,7 +161,7 @@ def main():
     summary = os.environ.get('GITHUB_STEP_SUMMARY')
     if summary:
         with open(summary, 'a') as stream:
-            stream.write('## T5004 build verified\n\nLinux 6.12.116; WireGuard installed; AWG optional packages only.\n\nDevice boot and live networking have not been tested. Do not flash unrelated hardware.\n')
+            stream.write('## T5004 build verified\n\nLinux 6.12.118; Dropbear with OpenSSH SFTP server; WireGuard installed; AWG optional packages only.\n\nDevice boot and live networking have not been tested. Do not flash unrelated hardware.\n')
     print(json.dumps(report, indent=2))
 
 
