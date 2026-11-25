@@ -80,10 +80,15 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import sys
           import tarfile
           from pathlib import Path
 
+          sys.path.insert(0, 'scripts')
+          from collect import flatten_checksums
+
           dist = Path('dist')
+          flatten_checksums(dist)
           verification = json.loads((dist / 'verification.json').read_text())
           sources = json.loads((dist / 'sources.json').read_text())
           profiles = json.loads((dist / 'profiles.json').read_text())
@@ -114,10 +119,10 @@ jobs:
               '',
               '## Install',
               '',
-              'Download `*-squashfs-sysupgrade.bin` and `SHA256SUMS`, verify the checksum, then install from an on-site LAN session:',
+              'Download `*-squashfs-sysupgrade.bin` and `SHA256SUMS` into the same directory. The checksum file uses flat Release asset names; `--ignore-missing` verifies the files you downloaded. Then install from an on-site LAN session:',
               '',
               '```sh',
-              'sha256sum -c SHA256SUMS',
+              'sha256sum -c --ignore-missing SHA256SUMS',
               'sysupgrade -n /tmp/openwrt-ramips-mt7621-iptime_t5004-squashfs-sysupgrade.bin',
               '```',
               '',

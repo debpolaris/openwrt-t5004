@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from collect import flatten_checksums
 from prepare import replace_assignment
 from verify import verify_config, verify_kernel, verify_manifest, verify_metadata, verify_shadow, verify_sysupgrade
 
@@ -61,6 +62,22 @@ class BuildValidationTests(unittest.TestCase):
     def test_recipe_changes_fail_closed(self):
         with self.assertRaises(ValueError):
             replace_assignment('OTHER:=old\n', 'PKG_VERSION', 'new')
+
+
+class ChecksumTests(unittest.TestCase):
+    def test_release_checksums_use_flat_asset_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'SHA256SUMS').write_text('abc  firmware/image.bin\ndef  optional-packages/pkg.apk\n')
+            flatten_checksums(root)
+            self.assertEqual((root / 'SHA256SUMS').read_text(), 'abc  image.bin\ndef  pkg.apk\n')
+
+    def test_duplicate_release_asset_names_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'SHA256SUMS').write_text('abc  firmware/image.bin\ndef  other/image.bin\n')
+            with self.assertRaisesRegex(ValueError, 'must be unique'):
+                flatten_checksums(root)
 
 
 class KernelValidationTests(unittest.TestCase):

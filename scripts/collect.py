@@ -20,6 +20,15 @@ def run(*args):
     subprocess.run(args, check=True)
 
 
+def flatten_checksums(dist):
+    path = dist / 'SHA256SUMS'
+    entries = [(digest, Path(name).name) for digest, name in (line.split(maxsplit=1) for line in path.read_text().splitlines())]
+    names = [name for _, name in entries]
+    if len(names) != len(set(names)):
+        raise ValueError('Release asset filenames must be unique')
+    path.write_text(''.join(f'{digest}  {name}\n' for digest, name in entries))
+
+
 def archive(destination, directory, members):
     run('tar', '--sort=name', '--exclude-vcs', '--exclude=__pycache__', '--exclude=*.pyc', '-I', 'zstd -T2 -3', '-cf', str(destination), '-C', str(directory), *members)
 
