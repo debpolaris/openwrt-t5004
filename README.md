@@ -14,12 +14,13 @@ ipTIME T5004 전용 커스텀 OpenWrt 빌드 레시피와 펌웨어 릴리스입
 
 ## 현재 릴리스
 
-[`v25.12-k6.12.118-081ea0bddbf0-c1a8a83d51a2`](https://github.com/debpolaris/openwrt-t5004/releases/tag/v25.12-k6.12.118-081ea0bddbf0-c1a8a83d51a2) (prerelease)
+[`v25.12-k6.12.118-081ea0bddbf0-5a443a406ad3`](https://github.com/debpolaris/openwrt-t5004/releases/tag/v25.12-k6.12.118-081ea0bddbf0-5a443a406ad3) (prerelease)
 
 - OpenWrt 25.12-SNAPSHOT, revision `custom-081ea0bddbf0`, target `ramips/mt7621`, device `iptime,t5004`
 - Linux 6.12.118, Dropbear + `openssh-sftp-server`, WireGuard 포함, AWG 선택 모듈, 패키지 130개
 - 기존 137개 패키지/kmod 설정과 129개 설치 패키지는 모두 유지했고, 추가는 `openssh-sftp-server` 1개뿐입니다.
 - **실기기 부팅·네트워크 테스트는 하지 않았습니다.** prerelease로 표시하는 이유입니다.
+- 이전 `c1a8a83d51a2` 릴리스는 Release 평면 자산명과 맞지 않는 체크섬 경로를 포함해 이 태그로 대체했습니다.
 - 알려진 제한: VLAN-aware bridge STP 사용 전 [OpenWrt issue 25457](https://github.com/openwrt/openwrt/issues/25457) 검토.
 
 ## 설치
