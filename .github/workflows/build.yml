@@ -89,7 +89,7 @@ jobs:
           profiles = json.loads((dist / 'profiles.json').read_text())
           images = profiles['profiles']['iptime_t5004']['images']
           sysupgrade = next(image for image in images if image['type'] == 'sysupgrade')
-          with tarfile.open(dist / sysupgrade['name']) as archive:
+          with tarfile.open(dist / 'firmware' / sysupgrade['name']) as archive:
               kernel_size = archive.getmember('sysupgrade-iptime_t5004/kernel').size
 
           commit = sources['openwrt']['commit']
