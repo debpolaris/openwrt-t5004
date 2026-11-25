@@ -115,7 +115,7 @@ jobs:
               '',
               '## Verification',
               '',
-              '`SHA256SUMS`, image metadata, package manifest, rootfs payloads, credentials, corresponding sources, and the build recipe are included. Device boot and live networking have **not** been tested (`runtime_tested: false`).',
+              '`SHA256SUMS`, image metadata, package manifest, rootfs payload and credential checks, corresponding sources, and the build recipe are included. Device boot and live networking have **not** been tested (`runtime_tested: false`).',
               '',
               '## Install',
               '',
